@@ -154,10 +154,10 @@ async def refresh(
 
     # Issue NEW pair
     new_access, _ = create_token(
-        user_id=user.id, role=user.role.value, token_type="access"
+        user_id=user.id, role=user.role, token_type="access"
     )
     new_refresh, _ = create_token(
-        user_id=user.id, role=user.role.value, token_type="refresh"
+        user_id=user.id, role=user.role, token_type="refresh"
     )
 
     settings = get_settings()

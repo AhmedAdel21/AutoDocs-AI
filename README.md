@@ -69,3 +69,5 @@ Refresh-token reuse triggers an immediate 401 with code `unauthorized` — possi
 - **ABAC:** GET /users/{id} allows self-read regardless of role.
 - **Idempotency:** POST /users honors `Idempotency-Key` header. 24h TTL.
 - **Audit:** Every state-changing action writes to audit_logs in the same transaction.
+
+docker exec -it autodocs-pg psql -U autodocs -d autodocs
