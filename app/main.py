@@ -1,5 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from app.config import get_settings
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.db import get_db
 
 
 def create_app() -> FastAPI:
@@ -22,6 +26,12 @@ def create_app() -> FastAPI:
     async def health() -> dict[str, str]:
         """Liveness probe. Does NOT check DB — that's /health/ready."""
         return {"status": "ok", "env": settings.app_env}
+
+    @app.get("/health/ready", tags=["meta"])
+    async def ready(db: AsyncSession = Depends(get_db)) -> dict[str, str]:
+        """Readiness probe. Hits the DB. K8s uses this to decide if we get traffic."""
+        await db.execute(text("SELECT 1"))
+        return {"status": "ready"}
 
     return app
 
