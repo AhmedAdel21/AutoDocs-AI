@@ -11,6 +11,8 @@ from app.redis_client import close_redis
 from app.observability import setup_tracing
 
 from app.api.v1 import api_router
+from app.logging_config import setup_logging
+from app.middleware.request_id import RequestIdMiddleware
 
 
 @asynccontextmanager
@@ -29,6 +31,8 @@ def create_app() -> FastAPI:
     - Multi-process workers (uvicorn --workers) get fresh state per process.
     - It mirrors the pattern Flask popularized; FastAPI inherits it.
     """
+
+    setup_logging()  # MUST be before any logging happens
     settings = get_settings()
 
     app = FastAPI(
@@ -37,6 +41,9 @@ def create_app() -> FastAPI:
         description="Internal Q&A platform for automotive engineers",
         lifespan=lifespan,
     )
+
+    # Order matters: request_id binds context BEFORE tracing
+    app.add_middleware(RequestIdMiddleware)
 
     # Tracing — must be after FastAPI() construction, before routes
     setup_tracing(app)

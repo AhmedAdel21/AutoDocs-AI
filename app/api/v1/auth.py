@@ -20,6 +20,7 @@ from app.auth.tokens import create_token, decode_token
 from app.redis_client import get_redis
 from app.auth.dependencies import get_current_user
 from app.schemas.user import UserRead
+from app.logging_config import log
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -73,6 +74,15 @@ async def login(
         valid_password = verify_password(payload.password, user.hashed_password)
 
     if user is None or not valid_password or not user.is_active:
+        log.warning(
+            "login.failed",
+            email_attempted=payload.email,
+            reason=(
+                "user_not_found"
+                if user is None
+                else ("inactive" if user and not user.is_active else "wrong_password")
+            ),
+        )
         # Audit the failure for the email regardless of whether the user exists
         await write_audit(
             db,
@@ -88,6 +98,12 @@ async def login(
     access_token, _ = create_token(user_id=user.id, role=user.role, token_type="access")
     refresh_token, refresh_exp = create_token(
         user_id=user.id, role=user.role, token_type="refresh"
+    )
+
+    log.info(
+        "login.success",
+        user_id=str(user.id),
+        role=user.role,
     )
 
     await write_audit(
@@ -153,12 +169,8 @@ async def refresh(
     await redis.setex(f"denylist:jti:{jti}", ttl, "1")
 
     # Issue NEW pair
-    new_access, _ = create_token(
-        user_id=user.id, role=user.role, token_type="access"
-    )
-    new_refresh, _ = create_token(
-        user_id=user.id, role=user.role, token_type="refresh"
-    )
+    new_access, _ = create_token(user_id=user.id, role=user.role, token_type="access")
+    new_refresh, _ = create_token(user_id=user.id, role=user.role, token_type="refresh")
 
     settings = get_settings()
     return TokenResponse(
