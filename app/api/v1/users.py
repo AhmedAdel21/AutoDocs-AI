@@ -21,13 +21,17 @@ from app.models.audit_log import AuditAction
 from app.services.audit import write_audit
 from app.schemas.user import UserUpdate
 
-from app.auth.dependencies import get_current_user, require_role
+from app.auth.dependencies import ForbiddenError, get_current_user, require_role
 from app.models.user import UserRole
 
 from app.middleware.idempotency import idempotent_post
 from app.redis_client import get_redis
 from redis.asyncio import Redis
 from fastapi.responses import JSONResponse
+
+from app.models.audit_log import AuditLog
+from app.schemas.user import AuditLogListResponse, AuditLogRead
+
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -105,10 +109,17 @@ async def get_user(
 ) -> User:
     """Returns a single user.
 
-    Status codes:
-    - 200: found
-    - 404: not found OR soft-deleted (we don't leak which)
+    ABAC: users can read themselves; admins and leads can read anyone.
+
+        Status codes:
+        - 200: found
+        - 404: not found OR soft-deleted (we don't leak which)
     """
+    is_self = current_user.id == user_id
+    is_privileged = current_user.role in (UserRole.ADMIN, UserRole.LEAD)
+    if not (is_self or is_privileged):
+        raise ForbiddenError("you can only view your own profile")
+
     stmt = select(User).where(User.id == user_id, User.deleted_at.is_(None))
     user = (await db.execute(stmt)).scalar_one_or_none()
     if user is None:
@@ -324,3 +335,49 @@ async def restore_user(
     await db.flush()
     await db.refresh(user)
     return user
+
+
+@router.get(
+    "/{user_id}/audit-log",
+    response_model=AuditLogListResponse,
+    summary="Audit log for a user (admin only)",
+    dependencies=[Depends(require_role(UserRole.ADMIN))],
+)
+async def get_user_audit_log(
+    user_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    limit: int = Query(default=50, ge=1, le=200),
+    cursor: str | None = Query(default=None),
+) -> AuditLogListResponse:
+    """All audit log entries where this user was the target. Cursor paginated.
+
+    Why audit logs are admin-only: log entries can contain sensitive context
+    (e.g., email enumeration via failed logins). Restrict access.
+    """
+    stmt = select(AuditLog).where(AuditLog.target_user_id == user_id)
+
+    if cursor:
+        decoded = decode_cursor(cursor)
+        cursor_created_at = datetime.fromisoformat(decoded["created_at"])
+        cursor_id = uuid.UUID(decoded["id"])
+        stmt = stmt.where(
+            (AuditLog.created_at, AuditLog.id) < (cursor_created_at, cursor_id)
+        )
+
+    stmt = stmt.order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).limit(
+        limit + 1
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+
+    has_more = len(rows) > limit
+    items = list(rows[:limit])
+    next_cursor = (
+        encode_cursor(items[-1].created_at, items[-1].id)
+        if has_more and items
+        else None
+    )
+
+    return AuditLogListResponse(
+        items=[AuditLogRead.model_validate(a) for a in items],
+        next_cursor=next_cursor,
+    )

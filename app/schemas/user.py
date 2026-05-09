@@ -4,6 +4,8 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.models.user import UserRole
+from app.models.audit_log import AuditAction
+from pydantic import BaseModel, ConfigDict
 
 
 class UserBase(BaseModel):
@@ -42,6 +44,25 @@ class UserRead(UserBase):
     updated_at: datetime
     deleted_at: datetime | None
 
+
 class UserListResponse(BaseModel):
     items: list[UserRead]
+    next_cursor: str | None = None
+
+
+class AuditLogRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    target_user_id: uuid.UUID | None
+    actor_user_id: uuid.UUID | None
+    action: AuditAction
+    details: dict
+    ip_address: str | None
+    user_agent: str | None
+    created_at: datetime
+
+
+class AuditLogListResponse(BaseModel):
+    items: list[AuditLogRead]
     next_cursor: str | None = None
