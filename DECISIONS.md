@@ -145,3 +145,55 @@ Each entry: **Decision**, **Rejected**, **Why**, **Revisit when**.
 **Why:** Atomicity. If the change rolls back, the audit rolls back. We never have an audit entry for a state change that didn't happen, OR a state change without an audit entry. Both halves of the bug-state-space eliminated.
 **Trade-off:** Audit failures cause user-facing failures. Acceptable: audit failures should be loud anyway.
 **Revisit when:** If audit volume causes write-amplification on the hot path. Then partition audit_logs by month; later, archive to cold storage.
+
+## D019 — audit_logs not partitioned today; revisit at 10M rows
+
+**Decision:** Single-table audit_logs without partitioning on Day 3.
+**Rejected:** Declarative partitioning by created_at from day one.
+**Why:** Premature complexity. At 200k rows we have no measured pain. Partitioning would force a 2-column PK (id, created_at) and add migration overhead. Defer until measured cost.
+**Migration plan when revisiting:** CREATE audit_logs_partitioned PARTITION BY RANGE (created_at), copy data, switch names atomically. Monthly partitions. Lifecycle to object storage at 90 days.
+**Revisit when:** row count crosses 10M OR audit-list query exceeds 100ms p95.
+
+## D020 — slowapi for rate limiting over custom Redis INCR
+
+**Decision:** slowapi with Redis backend.
+**Rejected:** Custom Redis INCR + EXPIRE on every endpoint.
+**Why:** slowapi is battle-tested, handles clock skew, has decorator integration. Rebuilding a sliding-window rate limiter is a footgun — easy to write a leaky one.
+**Trade-off:** library dependency, but minimal surface area. The custom per-email layer (Hour 4.4) is justified because slowapi's keying doesn't natively support multi-key limits.
+**Revisit when:** if we outgrow slowapi for advanced features (token bucket vs sliding window, distributed quotas).
+
+## D021 — OpenTelemetry from Day 3, console exporter in dev
+
+**Decision:** OTel API + SDK with console exporter in dev, OTLP-ready for prod.
+**Rejected:** No tracing; ad-hoc logging only.
+**Why:** Distributed tracing is the only way to debug a slow request without guessing. Custom spans on audit/token ops capture business operations, not just HTTP/SQL.
+**Revisit when:** never. Production-shaped systems need this.
+
+## D022 — Structured logging via structlog with OTel trace_id correlation
+
+**Decision:** structlog with JSON in prod, ConsoleRenderer in dev. Custom processor injects trace_id/span_id from OTel.
+**Rejected:** stdlib logging with format strings.
+**Why:** Logs need to be machine-parseable in prod (log aggregator ingestion) and human-readable in dev. Trace correlation lets us click from a log line to its trace and back.
+**Revisit when:** never.
+
+## D023 — Per-IP and per-email rate limits on /login
+
+**Decision:** Two layers: 5/min per IP (slowapi), 10/hour per email (custom Redis).
+**Rejected:** Per-IP only.
+**Why:** Per-IP defends scripted-from-one-source brute force. Per-email defends credential stuffing where attackers rotate IPs.
+**Trade-off:** Per-email limit can be abused to lock out a specific user (denial-of-service-via-rate-limit). Mitigation: clear the limit on successful login.
+**Revisit when:** If we add SSO and emails come from a verified IDP, per-email becomes less useful.
+
+## D024 — Liveness vs readiness probes are distinct
+
+**Decision:** /health is process liveness only (no deps). /health/ready checks Postgres + Redis, returns 503 on dep failure.
+**Rejected:** Single /health endpoint that checks dependencies.
+**Why:** Conflating them causes restart loops on transient dep outages. Liveness must be self-contained. Readiness controls traffic, liveness controls process restart.
+**Revisit when:** never.
+
+## D025 — Graceful shutdown on SIGTERM via lifespan
+
+**Decision:** lifespan handler awaits engine.dispose() and Redis close on shutdown.
+**Rejected:** No explicit shutdown handling.
+**Why:** Cloud Run sends SIGTERM 10s before SIGKILL. Without graceful shutdown, in-flight queries get cancelled mid-execution and connections leak.
+**Revisit when:** never.
