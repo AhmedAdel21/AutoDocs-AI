@@ -1,7 +1,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status, Query
+from fastapi import APIRouter, Depends, status, Query, Request
 from sqlalchemy import literal, select, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +24,11 @@ from app.schemas.user import UserUpdate
 from app.auth.dependencies import get_current_user, require_role
 from app.models.user import UserRole
 
+from app.middleware.idempotency import idempotent_post
+from app.redis_client import get_redis
+from redis.asyncio import Redis
+from fastapi.responses import JSONResponse
+
 router = APIRouter(prefix="/users", tags=["users"])
 
 
@@ -36,6 +41,8 @@ router = APIRouter(prefix="/users", tags=["users"])
 )
 async def create_user(
     payload: UserCreate,
+    request: Request,
+    redis: Annotated[Redis, Depends(get_redis)],
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> User:
@@ -46,29 +53,44 @@ async def create_user(
     - 409: email already exists
     - 422: validation error (Pydantic auto-handles)
     """
-    user = User(
-        email=payload.email,
-        full_name=payload.full_name,
-        role=payload.role,
-        hashed_password=hash_password(payload.password),
-    )
-    db.add(user)
-    try:
-        await db.flush()  # forces the INSERT, surfaces unique-violation now not on commit
-    except IntegrityError as e:
-        # Postgres unique violation on email.
-        # Constraint name is "ix_users_email" because the column has both
-        # unique=True and index=True — SQLAlchemy emits a UNIQUE INDEX (ix_*),
-        # not a UNIQUE CONSTRAINT (which PG would name *_key).
-        if "ix_users_email" in str(e.orig):
-            raise ConflictError(
-                "email already registered",
-                {"field": "email", "value": payload.email},
-            )
-        raise
 
-    await db.refresh(user)
-    return user
+    async def _do_create():
+        user = User(
+            email=payload.email,
+            full_name=payload.full_name,
+            role=payload.role,
+            hashed_password=hash_password(payload.password),
+        )
+        db.add(user)
+        try:
+            await db.flush()  # forces the INSERT, surfaces unique-violation now not on commit
+        except IntegrityError as e:
+            # Postgres unique violation on email.
+            # Constraint name is "ix_users_email" because the column has both
+            # unique=True and index=True — SQLAlchemy emits a UNIQUE INDEX (ix_*),
+            # not a UNIQUE CONSTRAINT (which PG would name *_key).
+            if "ix_users_email" in str(e.orig):
+                raise ConflictError(
+                    "email already registered",
+                    {"field": "email", "value": payload.email},
+                )
+            raise
+
+        await write_audit(
+            db,
+            action=AuditAction.USER_CREATED,
+            target_user_id=user.id,
+            actor_user_id=current_user.id,
+            details={"email": user.email, "role": user.role.value},
+        )
+        await db.refresh(user)
+
+        return JSONResponse(
+            status_code=status.HTTP_201_CREATED,
+            content=UserRead.model_validate(user).model_dump(mode="json"),
+        )
+
+    return await idempotent_post(request, redis, _do_create)
 
 
 @router.get(
