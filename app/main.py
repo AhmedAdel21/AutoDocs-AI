@@ -1,0 +1,29 @@
+from fastapi import FastAPI
+from app.config import get_settings
+
+
+def create_app() -> FastAPI:
+    """App factory pattern.
+
+    Why a factory and not a module-level `app = FastAPI()`?
+    - Tests can build their own app with overridden settings.
+    - Multi-process workers (uvicorn --workers) get fresh state per process.
+    - It mirrors the pattern Flask popularized; FastAPI inherits it.
+    """
+    settings = get_settings()
+
+    app = FastAPI(
+        title="AutoDocs AI",
+        version="0.1.0",
+        description="Internal Q&A platform for automotive engineers",
+    )
+
+    @app.get("/health", tags=["meta"])
+    async def health() -> dict[str, str]:
+        """Liveness probe. Does NOT check DB — that's /health/ready."""
+        return {"status": "ok", "env": settings.app_env}
+
+    return app
+
+
+app = create_app()
