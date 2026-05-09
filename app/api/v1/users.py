@@ -21,6 +21,9 @@ from app.models.audit_log import AuditAction
 from app.services.audit import write_audit
 from app.schemas.user import UserUpdate
 
+from app.auth.dependencies import get_current_user, require_role
+from app.models.user import UserRole
+
 router = APIRouter(prefix="/users", tags=["users"])
 
 
@@ -29,10 +32,12 @@ router = APIRouter(prefix="/users", tags=["users"])
     response_model=UserRead,
     status_code=status.HTTP_201_CREATED,
     summary="Create a new user",
+    dependencies=[Depends(require_role(UserRole.ADMIN))],
 )
 async def create_user(
     payload: UserCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> User:
     """Creates a user.
 
@@ -74,6 +79,7 @@ async def create_user(
 async def get_user(
     user_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> User:
     """Returns a single user.
 
@@ -95,6 +101,7 @@ async def get_user(
 )
 async def list_users(
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
     limit: int = Query(default=20, ge=1, le=100),
     cursor: str | None = Query(default=None),
 ) -> UserListResponse:
@@ -147,11 +154,13 @@ async def list_users(
     "/{user_id}",
     response_model=UserRead,
     summary="Partially update a user",
+    dependencies=[Depends(require_role(UserRole.ADMIN))],
 )
 async def update_user(
     user_id: uuid.UUID,
     payload: UserUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> User:
     """Partial update with optimistic locking.
 
@@ -217,10 +226,12 @@ async def update_user(
     "/{user_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Soft delete a user",
+    dependencies=[Depends(require_role(UserRole.ADMIN))],
 )
 async def delete_user(
     user_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> None:
     """Soft delete. Idempotent: returns 204 whether the user is active or already deleted.
 
@@ -253,10 +264,12 @@ async def delete_user(
     "/{user_id}:restore",
     response_model=UserRead,
     summary="Restore a soft-deleted user",
+    dependencies=[Depends(require_role(UserRole.ADMIN))],
 )
 async def restore_user(
     user_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> User:
     """Restore a soft-deleted user.
 
