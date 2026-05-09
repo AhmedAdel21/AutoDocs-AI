@@ -41,3 +41,7 @@ class UserRead(UserBase):
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None
+
+class UserListResponse(BaseModel):
+    items: list[UserRead]
+    next_cursor: str | None = None

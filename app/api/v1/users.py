@@ -1,7 +1,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, status, Query
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,8 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.errors import ConflictError, NotFoundError
 from app.db import get_db
 from app.models.user import User
-from app.schemas.user import UserCreate, UserRead
+from app.schemas.user import UserCreate, UserRead, UserListResponse
 from app.security import hash_password
+
+
+from app.api.cursor import decode_cursor, encode_cursor
+from datetime import datetime
 
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -43,8 +47,11 @@ async def create_user(
     try:
         await db.flush()  # forces the INSERT, surfaces unique-violation now not on commit
     except IntegrityError as e:
-        # Postgres unique violation on email
-        if "users_email_key" in str(e.orig):
+        # Postgres unique violation on email.
+        # Constraint name is "ix_users_email" because the column has both
+        # unique=True and index=True — SQLAlchemy emits a UNIQUE INDEX (ix_*),
+        # not a UNIQUE CONSTRAINT (which PG would name *_key).
+        if "ix_users_email" in str(e.orig):
             raise ConflictError(
                 "email already registered",
                 {"field": "email", "value": payload.email},
@@ -75,3 +82,46 @@ async def get_user(
     if user is None:
         raise NotFoundError("user", str(user_id))
     return user
+
+
+@router.get(
+    "",
+    response_model=UserListResponse,
+    summary="List users (cursor pagination)",
+)
+async def list_users(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    limit: int = Query(default=20, ge=1, le=100),
+    cursor: str | None = Query(default=None),
+) -> UserListResponse:
+    """Lists active users, newest first.
+
+    Cursor pagination via opaque base64-encoded (created_at, id) tuple.
+    Why not offset? Offset scans-and-discards at scale; cursor uses the index.
+    """
+    stmt = select(User).where(User.deleted_at.is_(None))
+
+    if cursor:
+        decoded = decode_cursor(cursor)
+        cursor_created_at = datetime.fromisoformat(decoded["created_at"])
+        cursor_id = uuid.UUID(decoded["id"])
+        # Tuple comparison: rows strictly after the cursor
+        stmt = stmt.where((User.created_at, User.id) < (cursor_created_at, cursor_id))
+
+    stmt = stmt.order_by(User.created_at.desc(), User.id.desc()).limit(limit + 1)
+
+    rows = (await db.execute(stmt)).scalars().all()
+
+    # Fetch one extra to know if there's a next page
+    has_more = len(rows) > limit
+    items = list(rows[:limit])
+
+    next_cursor: str | None = None
+    if has_more and items:
+        last = items[-1]
+        next_cursor = encode_cursor(last.created_at, last.id)
+
+    return UserListResponse(
+        items=[UserRead.model_validate(u) for u in items],
+        next_cursor=next_cursor,
+    )
