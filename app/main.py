@@ -1,9 +1,11 @@
 from fastapi import FastAPI, Depends
-from app.config import get_settings
-
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import get_settings
 from app.db import get_db
+
+from app.api.v1 import api_router
 
 
 def create_app() -> FastAPI:
@@ -21,6 +23,8 @@ def create_app() -> FastAPI:
         version="0.1.0",
         description="Internal Q&A platform for automotive engineers",
     )
+
+    app.include_router(api_router)
 
     @app.get("/health", tags=["meta"])
     async def health() -> dict[str, str]:
