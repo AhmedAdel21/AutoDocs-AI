@@ -2,11 +2,11 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, status, Query
-from sqlalchemy import select
+from sqlalchemy import literal, select, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.errors import ConflictError, NotFoundError
+from app.api.errors import BadRequestError, ConflictError, NotFoundError
 from app.db import get_db
 from app.models.user import User
 from app.schemas.user import UserCreate, UserRead, UserListResponse
@@ -102,11 +102,23 @@ async def list_users(
     stmt = select(User).where(User.deleted_at.is_(None))
 
     if cursor:
-        decoded = decode_cursor(cursor)
-        cursor_created_at = datetime.fromisoformat(decoded["created_at"])
-        cursor_id = uuid.UUID(decoded["id"])
-        # Tuple comparison: rows strictly after the cursor
-        stmt = stmt.where((User.created_at, User.id) < (cursor_created_at, cursor_id))
+        # Any malformed input here (bad base64, bad JSON, missing keys,
+        # bad datetime/UUID) all surface as ValueError/KeyError. Translate
+        # to a 400 with the D010 envelope instead of leaking a 500.
+        try:
+            decoded = decode_cursor(cursor)
+            cursor_created_at = datetime.fromisoformat(decoded["created_at"])
+            cursor_id = uuid.UUID(decoded["id"])
+        except (ValueError, KeyError, TypeError):
+            raise BadRequestError("invalid cursor", {"field": "cursor"})
+        # Row-value comparison: emits SQL `(created_at, id) < (:c, :i)`.
+        # tuple_() is required on both sides — a Python tuple here would only
+        # compare the first column and silently drop the id tiebreaker.
+        # literal() wraps scalars as BindParameter so tuple_() accepts them.
+        stmt = stmt.where(
+            tuple_(User.created_at, User.id)
+            < tuple_(literal(cursor_created_at), literal(cursor_id))
+        )
 
     stmt = stmt.order_by(User.created_at.desc(), User.id.desc()).limit(limit + 1)
 

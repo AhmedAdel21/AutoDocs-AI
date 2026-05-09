@@ -41,3 +41,8 @@ class NotFoundError(APIError):
 class ConflictError(APIError):
     def __init__(self, message: str, details: dict | None = None):
         super().__init__(status.HTTP_409_CONFLICT, "conflict", message, details)
+
+
+class BadRequestError(APIError):
+    def __init__(self, message: str, details: dict | None = None):
+        super().__init__(status.HTTP_400_BAD_REQUEST, "bad_request", message, details)

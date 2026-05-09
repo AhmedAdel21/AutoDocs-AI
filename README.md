@@ -1,3 +1,54 @@
-.venv\Scripts\activate
+# AutoDocs AI
 
-uvicorn app.main:app --reload --port 8000
+Internal Q&A platform for automotive engineers over technical specs (AUTOSAR, ISO 26262, supplier datasheets).
+Engineers ask questions in natural language; the system retrieves relevant spec chunks and generates answers grounded in those sources, with citations.
+
+## Why this project
+
+Demonstrates senior full-stack capability across:
+
+- FastAPI + Pydantic v2 + SQLAlchemy 2.0 async
+- Cursor pagination, optimistic locking, soft deletes, error envelope
+- JWT auth with refresh rotation + Redis denylist (Day 2)
+- LangChain LCEL retrieval chain with pgvector (Days 5-7)
+- SSE streaming with discriminated event types
+- Next.js 14 App Router frontend with TanStack Query + Tailwind tokens
+- OpenTelemetry instrumentation
+- Real EXPLAIN ANALYZE before/after on a 1M-row search query
+
+## Architecture highlights
+
+- **No starter kit.** Every file in this repo is hand-written and defensible.
+- **Single database.** Postgres + pgvector. The decision NOT to add Mongo is logged in DECISIONS.md.
+- **Cursor pagination throughout.** Offset pagination doesn't survive at scale.
+- **Three Pydantic schemas per resource** (Create / Update / Read). Prevents leak and over-acceptance.
+- **Error envelope on every error.** Machine + human + structured details.
+
+## Quickstart
+
+\`\`\`powershell
+
+# 1. Postgres
+
+docker run --name autodocs-pg -e POSTGRES_USER=autodocs -e POSTGRES_PASSWORD=autodocs -e POSTGRES_DB=autodocs -p 5432:5432 -d postgres:16
+
+# 2. Python
+
+uv venv
+.venv\Scripts\activate
+uv sync
+
+# 3. Migrate
+
+alembic upgrade head
+
+# 4. Run
+
+uvicorn app.main:app --reload
+\`\`\`
+
+Open <http://localhost:8000/docs>.
+
+## Status
+
+Day 1/14. See DAY_NN.md for the day-by-day build log. See DECISIONS.md for trade-offs.

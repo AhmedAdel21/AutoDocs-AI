@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import String, DateTime, Integer, Boolean, func
+from sqlalchemy import Boolean, DateTime, Index, Integer, String, desc, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -19,6 +19,19 @@ class UserRole(StrEnum):
 
 class User(Base):
     __tablename__ = "users"
+
+    # Partial index supporting cursor pagination (D007).
+    # Matches the list query exactly: ORDER BY created_at DESC, id DESC,
+    # filtered by deleted_at IS NULL. PG can index-scan this directly,
+    # no sort, no filter — fulfilling D007's "O(log N) via index" claim.
+    __table_args__ = (
+        Index(
+            "ix_users_active_pagination",
+            desc("created_at"),
+            desc("id"),
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
 
     # UUID v4 as primary key.
     # Why not autoincrement int? Distributed-system friendly, no leak of "how many users
@@ -49,10 +62,11 @@ class User(Base):
 
     # Soft delete. We never hard-delete users in regulated/audit contexts.
     # NULL = active. Non-NULL = deleted at this timestamp.
+    # No standalone index — the active-pagination partial index below
+    # covers the hot path (WHERE deleted_at IS NULL).
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
-        index=True,  # indexed because every list query filters WHERE deleted_at IS NULL
     )
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
