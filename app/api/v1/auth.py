@@ -21,6 +21,8 @@ from app.redis_client import get_redis
 from app.auth.dependencies import get_current_user
 from app.schemas.user import UserRead
 from app.logging_config import log
+from app.rate_limit import limiter
+from app.redis_client import get_redis
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -51,9 +53,10 @@ class UnauthorizedError(APIError):
     response_model=TokenResponse,
     summary="Login with email + password",
 )
+@limiter.limit("5/minute")
 async def login(
     payload: LoginRequest,
-    request: Request,
+    request: Request,  # required for slowapi to read the IP
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> TokenResponse:
     """Authenticate and issue access + refresh tokens.
@@ -62,6 +65,21 @@ async def login(
     - 200: success
     - 401: invalid credentials (NEVER 404 — would leak email existence)
     """
+
+    # Inside login(), before user lookup:
+    redis = await get_redis()
+    email_key = f"ratelimit:login:email:{payload.email.lower()}"
+    attempts = await redis.incr(email_key)
+    if attempts == 1:
+        await redis.expire(email_key, 3600)  # 1 hour window
+    if attempts > 10:
+        log.warning("login.rate_limited.email", email=payload.email, attempts=attempts)
+        raise APIError(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "rate_limited",
+            "too many login attempts for this email; try again later",
+        )
+
     stmt = select(User).where(User.email == payload.email, User.deleted_at.is_(None))
     user = (await db.execute(stmt)).scalar_one_or_none()
 
@@ -128,8 +146,10 @@ async def login(
     response_model=TokenResponse,
     summary="Refresh access token (rotates refresh token)",
 )
+@limiter.limit("10/minute")
 async def refresh(
     payload: RefreshRequest,
+    request: Request,  # required for slowapi to read the IP
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> TokenResponse:

@@ -13,6 +13,9 @@ from app.observability import setup_tracing
 from app.api.v1 import api_router
 from app.logging_config import setup_logging
 from app.middleware.request_id import RequestIdMiddleware
+from app.rate_limit import limiter
+from slowapi.errors import RateLimitExceeded
+from slowapi import _rate_limit_exceeded_handler
 
 
 @asynccontextmanager
@@ -41,6 +44,9 @@ def create_app() -> FastAPI:
         description="Internal Q&A platform for automotive engineers",
         lifespan=lifespan,
     )
+
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
     # Order matters: request_id binds context BEFORE tracing
     app.add_middleware(RequestIdMiddleware)
