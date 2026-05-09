@@ -52,3 +52,20 @@ Open <http://localhost:8000/docs>.
 ## Status
 
 Day 1/14. See DAY_NN.md for the day-by-day build log. See DECISIONS.md for trade-offs.
+
+## Auth flow
+
+1. POST /api/v1/auth/login → returns access + refresh tokens
+2. Access token: 15-minute TTL, sent as `Authorization: Bearer <token>`
+3. On 401, client calls POST /api/v1/auth/refresh with the refresh token
+4. Refresh issues a new pair AND denylists the old refresh's jti (rotation)
+5. Logout denylists current access AND refresh tokens
+
+Refresh-token reuse triggers an immediate 401 with code `unauthorized` — possible token theft.
+
+## Permission model
+
+- **RBAC:** ENGINEER, LEAD, ADMIN. Most endpoints require LEAD or ADMIN.
+- **ABAC:** GET /users/{id} allows self-read regardless of role.
+- **Idempotency:** POST /users honors `Idempotency-Key` header. 24h TTL.
+- **Audit:** Every state-changing action writes to audit_logs in the same transaction.

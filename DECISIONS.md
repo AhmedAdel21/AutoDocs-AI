@@ -67,6 +67,7 @@ Each entry: **Decision**, **Rejected**, **Why**, **Revisit when**.
 
 **Decision:** bcrypt algorithm, via the `bcrypt` package called directly. No `passlib` wrapper.
 **Rejected:**
+
 - *Algorithm:* argon2.
 - *Wrapper:* `passlib[bcrypt]`.
 **Why:**
@@ -85,8 +86,62 @@ Each entry: **Decision**, **Rejected**, **Why**, **Revisit when**.
 
 **Decision:** `CREATE INDEX ix_users_active_pagination ON users (created_at DESC, id DESC) WHERE deleted_at IS NULL`. Standalone `ix_users_deleted_at` dropped.
 **Rejected:**
+
 - Plain composite `(created_at, id)` with no `WHERE` clause.
 - Separate indexes on `deleted_at` and `(created_at, id)`.
 **Why:** The list query is *always* `WHERE deleted_at IS NULL ORDER BY created_at DESC, id DESC`. A partial index whose columns, sort direction, and filter exactly match that query lets Postgres index-scan with no `Sort` node and no row-filtering step — actually fulfilling D007's "O(log N) via index" claim. DESC in the index matches the query, so no backward-scan-with-tiebreaker subtleties. Dropping the standalone `deleted_at` index avoids paying for a second index that the partial fully subsumes for the hot path.
 **Trade-off acknowledged:** Admin queries like "list recently soft-deleted users" lose their index and seq-scan. Acceptable: those queries are rare and don't run on the hot path.
 **Revisit when:** If we add a frequent admin/audit endpoint over deleted users — re-add a `WHERE deleted_at IS NOT NULL` partial index then.
+
+## D012 — Composite index for audit log target queries
+
+**Decision:** ix_audit_logs_target_created_id ON audit_logs (target_user_id, created_at DESC, id DESC).
+**Rejected:** Separate indexes on each column.
+**Why:** The query is always "WHERE target_user_id = ? ORDER BY created_at DESC, id DESC". A composite covers all three predicates with one index walk. Separate indexes force the planner to bitmap-merge — slower at this query shape.
+**Revisit when:** If we add queries by actor_user_id or by action — those need their own indexes.
+
+## D013 — PATCH /users/{id} self-edit deferred to Day 8
+
+**Decision:** PATCH currently admin-only. Self-edit deferred until frontend lands.
+**Rejected:** Build self-edit on Day 2.
+**Why:** Self-edit needs field-level permissions (user can change full_name but not role). Adding without frontend would mean designing the rules without a real client. Defer until we have the call site.
+**Revisit when:** Day 8 frontend dashboard exists.
+
+## D014 — JWT HS256 over RS256
+
+**Decision:** HS256 (symmetric, single secret).
+**Rejected:** RS256 (asymmetric, public/private key pair).
+**Why:** Single-service app. RS256's value is letting consumers verify tokens without sharing the signing secret — relevant for microservices, not for a monolith. HS256 is simpler and the secret stays inside the service.
+**Revisit when:** If we split the API into multiple services that all need to verify tokens issued by an auth service.
+
+## D015 — Refresh-token rotation with Redis denylist
+
+**Decision:** Each refresh issues a new pair AND denylists the old refresh token's jti. TTL = remaining token lifetime.
+**Rejected:** Plain refresh (no rotation); revoke-all-tokens-on-event approach.
+**Why:** Stateless JWTs can't be revoked before exp without state somewhere. Rotation gives us short access tokens (15 min) with long-lived refresh capability AND theft detection: if a refresh is reused, the second use is denied — that's the signal somebody stole it. Denylist TTL = remaining token lifetime so Redis self-cleans.
+**Trade-off acknowledged:** Single Redis means single point of failure for revocation. Production: Redis cluster, or fall back to allowing tokens through if Redis is unreachable (depending on threat model).
+**Revisit when:** If we need cross-region replication of denylist (Redis cluster + replication).
+
+## D016 — Always run verify_password to defend against timing attacks
+
+**Decision:** Run bcrypt verify even when user lookup returns None.
+**Rejected:** Short-circuit return on user-not-found (faster).
+**Why:** A timing-side-channel attacker can distinguish "user exists, wrong password" from "user doesn't exist" by response latency. Short-circuit on None creates a measurable diff. Always-verify keeps timings consistent.
+**Trade-off:** Wasted CPU on bcrypt for nonexistent users (~250ms each). Cost is bounded by login rate limiting.
+**Revisit when:** If we add username enumeration via a different endpoint, this defense is moot anyway and we can drop it.
+
+## D017 — Idempotency-Key via Redis SET NX EX, 24h TTL
+
+**Decision:** POST /users honors Idempotency-Key header. Storage: Redis with atomic SET NX EX. Sentinel for in-progress; cached JSON response on completion. 24-hour TTL.
+**Rejected:** No idempotency (rely on unique constraint to fail loud); database-backed idempotency table.
+**Why:** Redis SET NX EX is atomic — guarantees one winner on race. 24h covers any reasonable retry window from clients, load balancers, browser back-button. DB-backed would work but adds a table, a write per request, and competes with the same transaction the request is making.
+**Trade-off:** Body of cached response is captured assuming JSON. Streaming or binary responses need a different cache strategy.
+**Revisit when:** Adding idempotency to streaming endpoints (Day 5+).
+
+## D018 — Audit logs in same DB transaction as the change they audit
+
+**Decision:** write_audit() adds to the session, doesn't commit. Endpoint's commit covers both the change and the audit.
+**Rejected:** Async fire-and-forget audit logging; separate audit service.
+**Why:** Atomicity. If the change rolls back, the audit rolls back. We never have an audit entry for a state change that didn't happen, OR a state change without an audit entry. Both halves of the bug-state-space eliminated.
+**Trade-off:** Audit failures cause user-facing failures. Acceptable: audit failures should be loud anyway.
+**Revisit when:** If audit volume causes write-amplification on the hot path. Then partition audit_logs by month; later, archive to cold storage.
