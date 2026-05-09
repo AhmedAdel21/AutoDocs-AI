@@ -14,8 +14,12 @@ from app.security import hash_password
 
 
 from app.api.cursor import decode_cursor, encode_cursor
-from datetime import datetime
+from datetime import datetime, timezone
 
+
+from app.models.audit_log import AuditAction
+from app.services.audit import write_audit
+from app.schemas.user import UserUpdate
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -137,3 +141,151 @@ async def list_users(
         items=[UserRead.model_validate(u) for u in items],
         next_cursor=next_cursor,
     )
+
+
+@router.patch(
+    "/{user_id}",
+    response_model=UserRead,
+    summary="Partially update a user",
+)
+async def update_user(
+    user_id: uuid.UUID,
+    payload: UserUpdate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> User:
+    """Partial update with optimistic locking.
+
+    Status codes:
+    - 200: updated
+    - 404: user not found or soft-deleted
+    - 409: version mismatch (concurrent update by another client)
+    - 422: validation error
+    """
+    stmt = select(User).where(User.id == user_id, User.deleted_at.is_(None))
+    user = (await db.execute(stmt)).scalar_one_or_none()
+    if user is None:
+        raise NotFoundError("user", str(user_id))
+
+    # Optimistic locking check
+    if user.version != payload.version:
+        raise ConflictError(
+            "version mismatch — user was modified by another client",
+            {
+                "expected_version": payload.version,
+                "current_version": user.version,
+            },
+        )
+
+    # Capture before-state for audit
+    before = {
+        "full_name": user.full_name,
+        "role": user.role.value if hasattr(user.role, "value") else user.role,
+        "is_active": user.is_active,
+    }
+
+    # Apply only the fields that were sent (partial update)
+    update_data = payload.model_dump(exclude_unset=True, exclude={"version"})
+    for field, value in update_data.items():
+        setattr(user, field, value)
+
+    user.version += 1  # bump for next optimistic-lock check
+
+    after = {
+        "full_name": user.full_name,
+        "role": user.role.value if hasattr(user.role, "value") else user.role,
+        "is_active": user.is_active,
+    }
+
+    await write_audit(
+        db,
+        action=AuditAction.USER_UPDATED,
+        target_user_id=user.id,
+        # actor_user_id will be filled when auth lands (Hour 2)
+        details={
+            "before": before,
+            "after": after,
+            "fields_changed": list(update_data.keys()),
+        },
+    )
+
+    await db.flush()
+    await db.refresh(user)
+    return user
+
+
+@router.delete(
+    "/{user_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Soft delete a user",
+)
+async def delete_user(
+    user_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    """Soft delete. Idempotent: returns 204 whether the user is active or already deleted.
+
+    Returns 404 only if the user never existed.
+    """
+    stmt = select(User).where(User.id == user_id)
+    user = (await db.execute(stmt)).scalar_one_or_none()
+    if user is None:
+        raise NotFoundError("user", str(user_id))
+
+    if user.deleted_at is not None:
+        # Already deleted — return 204, idempotent. No audit entry.
+        return
+
+    user.deleted_at = datetime.now(timezone.utc)
+    user.is_active = False
+    user.version += 1
+
+    await write_audit(
+        db,
+        action=AuditAction.USER_DELETED,
+        target_user_id=user.id,
+        details={"deleted_at": user.deleted_at.isoformat()},
+    )
+
+    await db.flush()
+
+
+@router.post(
+    "/{user_id}:restore",
+    response_model=UserRead,
+    summary="Restore a soft-deleted user",
+)
+async def restore_user(
+    user_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> User:
+    """Restore a soft-deleted user.
+
+    Status codes:
+    - 200: restored
+    - 404: user never existed
+    - 409: user is not deleted (nothing to restore)
+    """
+    stmt = select(User).where(User.id == user_id)
+    user = (await db.execute(stmt)).scalar_one_or_none()
+    if user is None:
+        raise NotFoundError("user", str(user_id))
+
+    if user.deleted_at is None:
+        raise ConflictError(
+            "user is not deleted, nothing to restore",
+            {"user_id": str(user_id)},
+        )
+
+    user.deleted_at = None
+    user.is_active = True
+    user.version += 1
+
+    await write_audit(
+        db,
+        action=AuditAction.USER_RESTORED,
+        target_user_id=user.id,
+    )
+
+    await db.flush()
+    await db.refresh(user)
+    return user
