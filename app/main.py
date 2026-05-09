@@ -1,11 +1,22 @@
 from fastapi import FastAPI, Depends
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+from contextlib import asynccontextmanager
+
 
 from app.config import get_settings
 from app.db import get_db
+from app.redis_client import close_redis
 
 from app.api.v1 import api_router
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # startup: nothing yet (redis is lazy-connected)
+    yield
+    # shutdown
+    await close_redis()
 
 
 def create_app() -> FastAPI:
@@ -22,6 +33,7 @@ def create_app() -> FastAPI:
         title="AutoDocs AI",
         version="0.1.0",
         description="Internal Q&A platform for automotive engineers",
+        lifespan=lifespan,
     )
 
     app.include_router(api_router)

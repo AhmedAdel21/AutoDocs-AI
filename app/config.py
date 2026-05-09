@@ -16,6 +16,12 @@ class Settings(BaseSettings):
     app_env: str = Field(default="development")
     log_level: str = Field(default="INFO")
 
+    redis_url: str = Field(...)
+    jwt_secret: str = Field(..., min_length=32)
+    jwt_algorithm: str = Field(default="HS256")
+    jwt_access_ttl_minutes: int = Field(default=15)
+    jwt_refresh_ttl_days: int = Field(default=7)
+
 
 @lru_cache
 def get_settings() -> Settings:
