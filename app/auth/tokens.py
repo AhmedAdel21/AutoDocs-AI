@@ -5,6 +5,7 @@ from typing import Any, Literal
 from jose import jwt, JWTError
 
 from app.config import get_settings
+from app.observability import tracer
 
 
 TokenType = Literal["access", "refresh"]
@@ -22,6 +23,11 @@ def create_token(
     jti: str | None = None,
 ) -> tuple[str, datetime]:
     """Returns (token, expiry_datetime)."""
+
+    with tracer.start_as_current_span("token.create") as span:
+        span.set_attribute("token.type", token_type)
+        span.set_attribute("user.id", str(user_id))
+
     settings = get_settings()
 
     if token_type == "access":

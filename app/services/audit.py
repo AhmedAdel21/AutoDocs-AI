@@ -4,6 +4,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.audit_log import AuditLog, AuditAction
+from app.observability import tracer
 
 
 async def write_audit(
@@ -22,6 +23,14 @@ async def write_audit(
     if the endpoint fails, the audit log rolls back with it. This is intentional:
     we never want an audit entry for a state change that didn't happen.
     """
+
+    with tracer.start_as_current_span("audit.write") as span:
+        span.set_attribute("audit.action", action.value)
+        if target_user_id:
+            span.set_attribute("audit.target_user_id", str(target_user_id))
+        if actor_user_id:
+            span.set_attribute("audit.actor_user_id", str(actor_user_id))
+
     entry = AuditLog(
         action=action,
         target_user_id=target_user_id,
