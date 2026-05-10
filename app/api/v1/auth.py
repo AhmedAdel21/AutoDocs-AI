@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status, Request
+from fastapi import APIRouter, Depends, status, Request, Response
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,6 +57,7 @@ class UnauthorizedError(APIError):
 async def login(
     payload: LoginRequest,
     request: Request,  # required for slowapi to read the IP
+    response: Response,  # required for slowapi to inject X-RateLimit-* headers
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> TokenResponse:
     """Authenticate and issue access + refresh tokens.
@@ -150,6 +151,7 @@ async def login(
 async def refresh(
     payload: RefreshRequest,
     request: Request,  # required for slowapi to read the IP
+    response: Response,  # required for slowapi to inject X-RateLimit-* headers
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> TokenResponse:

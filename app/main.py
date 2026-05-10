@@ -21,6 +21,8 @@ from app.redis_client import get_redis
 from app.api.errors import APIError
 from app.logging_config import log
 from app.db import engine
+from fastapi.middleware.cors import CORSMiddleware
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -51,6 +53,22 @@ def create_app() -> FastAPI:
         version="0.1.0",
         description="Internal Q&A platform for automotive engineers",
         lifespan=lifespan,
+    )
+
+    # CORS — must be added FIRST so preflight responses come from the middleware
+    # not from a 404 if the path doesn't exist
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:3000"],  # tight: only the dev frontend
+        allow_credentials=True,  # required if we ever use cookies
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "Idempotency-Key",
+            "X-Request-Id",
+        ],
+        expose_headers=["X-Request-Id"],  # let frontend read the request ID
     )
 
     app.state.limiter = limiter

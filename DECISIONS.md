@@ -197,3 +197,17 @@ Each entry: **Decision**, **Rejected**, **Why**, **Revisit when**.
 **Rejected:** No explicit shutdown handling.
 **Why:** Cloud Run sends SIGTERM 10s before SIGKILL. Without graceful shutdown, in-flight queries get cancelled mid-execution and connections leak.
 **Revisit when:** never.
+
+## D026 — Frontend in separate repo
+
+**Decision:** autodocs (backend) and autodocs-web (frontend) are separate repos.
+**Rejected:** Monorepo with both top-level folders.
+**Why:** Different toolchains (Python/Node), different CI eventually, different deploy targets. Monorepo would need workspace tooling (Turborepo, Nx) which adds friction at this stage.
+**Revisit when:** If we publish a shared types package (e.g., generated from OpenAPI) — monorepo wins for that case.
+
+## D027 — CORS: explicit origin allowlist, not wildcard
+
+**Decision:** allow_origins=["http://localhost:3000"] in dev, prod-domain only in prod.
+**Rejected:** allow_origins=["*"].
+**Why:** Wildcard + credentials is forbidden by browsers. Explicit allowlist is also defense-in-depth.
+**Revisit when:** never; this is foundational.
