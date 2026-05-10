@@ -211,3 +211,15 @@ Each entry: **Decision**, **Rejected**, **Why**, **Revisit when**.
 **Rejected:** allow_origins=["*"].
 **Why:** Wildcard + credentials is forbidden by browsers. Explicit allowlist is also defense-in-depth.
 **Revisit when:** never; this is foundational.
+
+## D028 — Recursive character chunking, 800/100, manual implementation
+
+**Decision:** Recursive splitting prioritizing paragraph → sentence → word boundaries. 800-char chunks with 100-char overlap. Implemented by hand in `app/services/chunking.py`.
+**Rejected:**
+
+- Fixed-size chunking (splits mid-sentence; semantically broken at retrieval).
+- Sentence-only chunking (chunk size variance is too high; either too small or too large).
+- LangChain `RecursiveCharacterTextSplitter` from day one (used the default; would weaken interview answers; can't defend without understanding the primitives).
+**Why this size:** 800 chars ≈ 200 tokens. Fits comfortably in LLM context with room for prompt + 5 retrieved chunks. 100-char overlap (~25 tokens) preserves concepts that span chunk boundaries.
+**Trade-off:** Manual implementation is slower to ship than LangChain's. Worth it because we understand every step. Day 7 we layer LangChain on top — at that point we recognize the algorithm because we built it.
+**Revisit when:** If we move to long-form context models (Claude/GPT with 100k+ context), we'd reduce chunk count and increase chunk size. If we add hybrid retrieval (BM25 + dense), chunks may need different boundaries for the BM25 leg.
