@@ -13,3 +13,7 @@ build/
 htmlcov/
 .idea/
 .vscode/
+
+# Local DB dumps / backups — never commit
+backups/
+db_backup_*.sql
