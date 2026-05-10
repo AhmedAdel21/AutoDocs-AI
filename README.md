@@ -71,3 +71,18 @@ Refresh-token reuse triggers an immediate 401 with code `unauthorized` — possi
 - **Audit:** Every state-changing action writes to audit_logs in the same transaction.
 
 docker exec -it autodocs-pg psql -U autodocs -d autodocs
+
+## RAG pipeline (Days 5-7)
+
+Day 5 (today): document ingestion. Recursive chunking with overlap, local sentence-transformers embeddings, pgvector HNSW index, content-hash idempotency, atomic single-transaction ingestion.
+
+Day 6: frontend integration — document upload UI, document list with status indicator.
+
+Day 7: LangChain LCEL retrieval chain. Layered on top of the manual primitives built in Day 5 — same algorithm, abstracted.
+
+### Key files
+
+- `app/services/chunking.py` — recursive character splitter with overlap
+- `app/services/embedding.py` — local embedding via sentence-transformers
+- `app/services/ingestion.py` — atomic ingest pipeline
+- `app/services/retrieval.py` — vector similarity search with threshold guard

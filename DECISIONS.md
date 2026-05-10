@@ -235,3 +235,35 @@ Each entry: **Decision**, **Rejected**, **Why**, **Revisit when**.
 **Async pattern:** `asyncio.to_thread` wraps the sync `model.encode()` so the FastAPI event loop isn't blocked. Concurrent requests don't queue behind embedding.
 **Trade-off:** Lower retrieval quality than hosted SOTA models. Acceptable for the prep project; in production I'd benchmark on a held-out eval set.
 **Revisit when:** Eval shows retrieval quality is the bottleneck. Swap to OpenAI embeddings or a larger ST model. The constant `EMBEDDING_DIM` is the migration trigger — changing it requires re-embedding the corpus.
+
+## D030 — HNSW over IVFFlat for vector index
+
+**Decision:** HNSW index on document_chunks.embedding with vector_cosine_ops, m=16, ef_construction=64.
+**Rejected:**
+
+- IVFFlat — faster build, smaller index, but lower recall on diverse data.
+- No index — falls back to seq scan, fine at 100 chunks, broken at 100k.
+**Why:** HNSW has higher recall and graceful degradation. IVFFlat clusters assume the data has clean centroid structure; technical documents don't necessarily cluster cleanly. The trade-off is build time and memory — HNSW indexes are larger and slower to build, but for a corpus that grows incrementally that's amortized.
+**Operator class:** vector_cosine_ops because we use cosine similarity. Mismatching operator class to query operator means the index isn't used.
+**Revisit when:** If corpus exceeds ~1M vectors and HNSW build time becomes a problem, evaluate IVFFlat with tuned list count, or partition the index by document type.
+
+## D031 — Content-hash idempotency on document ingestion
+
+**Decision:** SHA-256 of raw_content as the idempotency key. Re-uploading same content returns existing document.
+**Rejected:**
+
+- Header-based Idempotency-Key (the Day 2 mechanism for /users).
+- No idempotency — duplicate documents on retry.
+**Why:** Document ingestion is content-defined, not session-defined. Same spec uploaded from different clients at different times is the same document. SHA-256 is collision-resistant, fast, deterministic.
+**Trade-off:** Doesn't catch near-duplicates (one whitespace diff produces different hash). For semantic deduplication we'd need embedding similarity at the document level — that's a Day 8+ feature.
+**Revisit when:** Adding fuzzy deduplication for near-duplicates.
+
+## D032 — Atomic single-transaction ingestion
+
+**Decision:** Document + all chunks + all embeddings in one transaction. Embedding failure rolls back the document.
+**Rejected:**
+
+- Document first, chunks streaming behind a queue (eventual consistency).
+- Per-chunk transactions.
+**Why:** Atomicity. Half-ingested documents (PROCESSING with no chunks) become orphaned forever. Single transaction means clean state on retry. Trade-off: large documents hold the connection longer — flagged in D026 (DB session scoping for RAG endpoints from Day 3 mock Q5).
+**Revisit when:** If individual documents exceed 1000 chunks (~10MB raw), move to async ingestion via queue with explicit status transitions.
