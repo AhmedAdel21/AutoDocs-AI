@@ -8,8 +8,13 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
 from app.config import get_settings
 from app.db import Base
-from app.models import user  # noqa: F401  - import all models so Alembic sees them
+from app.models import (
+    user,
+    audit_log,
+    document,
+)  # noqa: F401  - import all models so Alembic sees them
 
+from pgvector.sqlalchemy import Vector  # noqa: F401  # ensure pgvector type registered
 
 config = context.config
 config.set_main_option("sqlalchemy.url", get_settings().database_url)
