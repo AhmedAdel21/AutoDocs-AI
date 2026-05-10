@@ -223,3 +223,15 @@ Each entry: **Decision**, **Rejected**, **Why**, **Revisit when**.
 **Why this size:** 800 chars ≈ 200 tokens. Fits comfortably in LLM context with room for prompt + 5 retrieved chunks. 100-char overlap (~25 tokens) preserves concepts that span chunk boundaries.
 **Trade-off:** Manual implementation is slower to ship than LangChain's. Worth it because we understand every step. Day 7 we layer LangChain on top — at that point we recognize the algorithm because we built it.
 **Revisit when:** If we move to long-form context models (Claude/GPT with 100k+ context), we'd reduce chunk count and increase chunk size. If we add hybrid retrieval (BM25 + dense), chunks may need different boundaries for the BM25 leg.
+
+## D029 — Local embeddings via sentence-transformers, all-MiniLM-L6-v2
+
+**Decision:** Local embedding inference. Model: all-MiniLM-L6-v2, 384 dims, L2-normalized at compute time.
+**Rejected:**
+
+- OpenAI text-embedding-3-small (1536 dims, hosted) — better quality, but introduces API key dependency, cost, network latency.
+- Larger sentence-transformers models (e.g., all-mpnet-base-v2, 768 dims) — better quality but ~2x slower inference on CPU.
+**Why this model:** Smallest viable model that retains acceptable quality. 384 dims keeps the pgvector index size manageable. CPU inference at ~50-200ms per chunk is workable for ingestion (which is async/batched anyway).
+**Async pattern:** `asyncio.to_thread` wraps the sync `model.encode()` so the FastAPI event loop isn't blocked. Concurrent requests don't queue behind embedding.
+**Trade-off:** Lower retrieval quality than hosted SOTA models. Acceptable for the prep project; in production I'd benchmark on a held-out eval set.
+**Revisit when:** Eval shows retrieval quality is the bottleneck. Swap to OpenAI embeddings or a larger ST model. The constant `EMBEDDING_DIM` is the migration trigger — changing it requires re-embedding the corpus.
